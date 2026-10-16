@@ -46,8 +46,8 @@ public class MobileHandDepthController : MonoBehaviour
     [Tooltip("Flip webcam feed vertically if required by specific camera drivers (default: false)")]
     public bool flipVertically = false;
 
-    [Tooltip("Camera sensor rotation angle on mobile devices (default 90 for standard Android back camera in portrait)")]
-    public int cameraRotationAngle = 90;
+    [Tooltip("Camera sensor rotation angle offset (default 0; mobile auto-uses WebCamTexture.videoRotationAngle)")]
+    public int cameraRotationAngle = 0;
 
     [Header("Multi-Hand Tracking")]
     [Tooltip("Maximum hands to detect and track concurrently")]
@@ -61,13 +61,18 @@ public class MobileHandDepthController : MonoBehaviour
     public VRHolographicHand vrHandVisualizerSecondary; // Hand 1 (Right/Secondary)
     public VRHolographicHand[] vrHandVisualizers;
     public bool showVRHand = true;
-    public bool showSkeleton = false;
+    public bool showSkeleton = true;
+    [Tooltip("If true, shows full uncropped/unzoomed camera frame (FitInParent). If false, fills screen (EnvelopeParent).")]
+    public bool fitCameraFeed = true;
     public Color hand0Color = new Color(0.1f, 0.85f, 1f, 0.85f);  // Cyan
     public Color hand1Color = new Color(0.85f, 0.3f, 1f, 0.85f);  // Neon Magenta / Violet
 
     [Header("Visual Styling (Skeleton Mode)")]
     public Color jointColor = new Color(0.2f, 0.85f, 1f, 1f);
     public Color boneColor = new Color(1f, 0.9f, 0.2f, 0.9f);
+
+    Text[] m_UIDepthBadges = new Text[k_MaxHands];
+    RectTransform[] m_UIDepthBadgeRects = new RectTransform[k_MaxHands];
 
     // Hand Skeleton Constants
     const int k_MaxHands = 2;
@@ -173,6 +178,9 @@ public class MobileHandDepthController : MonoBehaviour
         vrHandVisualizers[1] = vrHandVisualizerSecondary;
         vrHandVisualizers[1].SetThemeColor(hand1Color, new Color(1f, 0.5f, 1f, 1f));
 
+        showSkeleton = true;
+        fitCameraFeed = true;
+
 #if !UNITY_EDITOR
         // On mobile with AR back camera, do not mirror by default so real hands match real-world positions
         mirrorHorizontally = false;
@@ -187,6 +195,8 @@ public class MobileHandDepthController : MonoBehaviour
         SetupUIListeners();
     }
 
+    GameObject m_StartCard;
+
     void Start()
     {
         if (permissionHelper != null)
@@ -194,17 +204,126 @@ public class MobileHandDepthController : MonoBehaviour
             permissionHelper.OnPermissionGranted += OnPermissionGranted;
             permissionHelper.OnPermissionDenied += OnPermissionDenied;
         }
-        else
+
+        CreateStartCard();
+    }
+
+    void CreateStartCard()
+    {
+        var canvas = FindAnyObjectByType<Canvas>();
+        if (canvas == null)
         {
             OnPermissionGranted();
+            return;
         }
+
+        m_StartCard = new GameObject("StartPermissionCard", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        m_StartCard.transform.SetParent(canvas.transform, false);
+        var rt = m_StartCard.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(680f, 440f);
+        rt.anchoredPosition = Vector2.zero;
+
+        var img = m_StartCard.GetComponent<Image>();
+        img.color = new Color(0.08f, 0.12f, 0.18f, 0.95f);
+        var outline = m_StartCard.AddComponent<Outline>();
+        outline.effectColor = new Color(0f, 0.9f, 1f, 0.9f);
+        outline.effectDistance = new Vector2(3, -3);
+
+        // Title
+        var titleGo = new GameObject("Title", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        titleGo.transform.SetParent(m_StartCard.transform, false);
+        var tRt = titleGo.GetComponent<RectTransform>();
+        tRt.anchorMin = new Vector2(0f, 0.7f);
+        tRt.anchorMax = new Vector2(1f, 1f);
+        tRt.anchoredPosition = new Vector2(0f, -20f);
+        var titleTxt = titleGo.GetComponent<Text>();
+        titleTxt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
+        titleTxt.fontSize = 32;
+        titleTxt.fontStyle = FontStyle.Bold;
+        titleTxt.alignment = TextAnchor.MiddleCenter;
+        titleTxt.color = new Color(0f, 0.95f, 1f, 1f);
+        titleTxt.text = "MediaPipe Hand Gestures";
+
+        // Message
+        var msgGo = new GameObject("Message", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        msgGo.transform.SetParent(m_StartCard.transform, false);
+        var mRt = msgGo.GetComponent<RectTransform>();
+        mRt.anchorMin = new Vector2(0.08f, 0.35f);
+        mRt.anchorMax = new Vector2(0.92f, 0.72f);
+        mRt.anchoredPosition = Vector2.zero;
+        var msgTxt = msgGo.GetComponent<Text>();
+        msgTxt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
+        msgTxt.fontSize = 22;
+        msgTxt.alignment = TextAnchor.MiddleCenter;
+        msgTxt.color = new Color(0.9f, 0.9f, 0.95f, 1f);
+        msgTxt.text = "Track hands and recognize gestures in real-time.\n\nTap below to enable camera and begin tracking.";
+
+        // Start Button
+        var btnGo = new GameObject("StartButton", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button), typeof(Outline));
+        btnGo.transform.SetParent(m_StartCard.transform, false);
+        var bRt = btnGo.GetComponent<RectTransform>();
+        bRt.anchorMin = new Vector2(0.5f, 0.18f);
+        bRt.anchorMax = new Vector2(0.5f, 0.18f);
+        bRt.pivot = new Vector2(0.5f, 0.5f);
+        bRt.sizeDelta = new Vector2(380f, 75f);
+        bRt.anchoredPosition = Vector2.zero;
+
+        var bImg = btnGo.GetComponent<Image>();
+        bImg.color = new Color(0.12f, 0.5f, 0.95f, 0.95f);
+        var bOutline = btnGo.GetComponent<Outline>();
+        bOutline.effectColor = new Color(0.3f, 0.85f, 1f, 0.9f);
+        bOutline.effectDistance = new Vector2(2, -2);
+
+        var btnTextGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        btnTextGo.transform.SetParent(btnGo.transform, false);
+        var btRt = btnTextGo.GetComponent<RectTransform>();
+        btRt.anchorMin = Vector2.zero;
+        btRt.anchorMax = Vector2.one;
+        btRt.sizeDelta = Vector2.zero;
+        var bTxt = btnTextGo.GetComponent<Text>();
+        bTxt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
+        bTxt.fontSize = 24;
+        bTxt.fontStyle = FontStyle.Bold;
+        bTxt.alignment = TextAnchor.MiddleCenter;
+        bTxt.color = Color.white;
+        bTxt.text = "Start Camera & Tracking";
+
+        var btn = btnGo.GetComponent<Button>();
+        btn.onClick.AddListener(() =>
+        {
+            if (m_StartCard != null) m_StartCard.SetActive(false);
+            if (permissionHelper != null)
+            {
+                permissionHelper.StartCoroutine(permissionHelper.CheckAndRequestCameraPermission());
+            }
+            else
+            {
+                OnPermissionGranted();
+            }
+        });
     }
+
+    ScreenOrientation m_LastOrientation;
+    int m_LastScreenWidth;
+    int m_LastScreenHeight;
 
     void Update()
     {
-#if UNITY_EDITOR
-        UpdateWebCamOrientation();
-#endif
+        if (Screen.width != m_LastScreenWidth || Screen.height != m_LastScreenHeight || Screen.orientation != m_LastOrientation)
+        {
+            m_LastScreenWidth = Screen.width;
+            m_LastScreenHeight = Screen.height;
+            m_LastOrientation = Screen.orientation;
+            ConfigureCanvasAndUI();
+            UpdateWebCamOrientation();
+        }
+        else
+        {
+            UpdateWebCamOrientation();
+        }
 
         // Hotkeys to quickly toggle mirror mode (M), flip vertical (F), or VR Hologram Hand (H)
         if (Keyboard.current != null)
@@ -354,35 +473,31 @@ public class MobileHandDepthController : MonoBehaviour
     {
         if (toggleDepthButton != null)
         {
+            var btnText = toggleDepthButton.GetComponentInChildren<Text>();
+            if (btnText != null) btnText.text = "Camera: Fit";
+
             toggleDepthButton.onClick.AddListener(() =>
             {
-                m_ShowDepthMap = !m_ShowDepthMap;
-                if (depthPreviewUI != null)
-                    depthPreviewUI.gameObject.SetActive(m_ShowDepthMap);
+                fitCameraFeed = !fitCameraFeed;
+                UpdateWebCamOrientation();
+                if (btnText != null)
+                    btnText.text = fitCameraFeed ? "Camera: Fit" : "Camera: Fill";
+                SetStatus($"Camera View: {(fitCameraFeed ? "Fit (Full View Unzoomed)" : "Fill (Zoomed)")}");
             });
         }
 
         if (toggleHandButton != null)
         {
+            var btnText = toggleHandButton.GetComponentInChildren<Text>();
+            if (btnText != null) btnText.text = "Skeleton: ON";
+
             toggleHandButton.onClick.AddListener(() =>
             {
-                // Cycle visual styles: VR Hologram Hand -> Both -> 2D Skeleton
-                if (showVRHand && !showSkeleton)
-                {
-                    showSkeleton = true; // Both
-                }
-                else if (showVRHand && showSkeleton)
-                {
-                    showVRHand = false; // Skeleton only
-                }
-                else
-                {
-                    showVRHand = true;
-                    showSkeleton = false; // VR Hologram only
-                }
-
+                showSkeleton = !showSkeleton;
                 SetHandVisualsActive(m_IsRunning);
-                SetStatus($"Display: {(showVRHand ? "VR Hologram " : "")}{(showSkeleton ? "+ Skeleton" : "")}");
+                if (btnText != null)
+                    btnText.text = showSkeleton ? "Skeleton: ON" : "Skeleton: OFF";
+                SetStatus($"Skeleton: {(showSkeleton ? "ON" : "OFF")}");
             });
         }
 
@@ -478,27 +593,34 @@ public class MobileHandDepthController : MonoBehaviour
 
     void StartProcessing()
     {
-#if UNITY_EDITOR
-        if (WebCamTexture.devices.Length > 0)
+        if (WebCamTexture.devices != null && WebCamTexture.devices.Length > 0)
         {
-            m_EditorWebCam = new WebCamTexture(1280, 720, 30);
+            string devName = WebCamTexture.devices[0].name;
+            for (int i = 0; i < WebCamTexture.devices.Length; i++)
+            {
+#if UNITY_ANDROID || UNITY_IOS
+                if (!WebCamTexture.devices[i].isFrontFacing)
+                {
+                    devName = WebCamTexture.devices[i].name;
+                    break;
+                }
+#endif
+            }
+            m_EditorWebCam = new WebCamTexture(devName, 1280, 720, 30);
             m_EditorWebCam.Play();
-            SetupEditorCameraBackground();
-            SetStatus($"Running in Editor (Webcam: {WebCamTexture.devices[0].name})");
+            SetupCameraBackground();
+            SetStatus($"Camera Active ({devName}). Show your hands!");
         }
         else
         {
-            SetStatus("No webcam detected in Editor");
+            SetStatus("No camera device found on device.");
         }
-#else
-        SetStatus("ARCore active. Detecting hands & depth...");
-#endif
 
         m_IsRunning = true;
         RunInferenceLoop();
     }
 
-    void SetupEditorCameraBackground()
+    void SetupCameraBackground()
     {
         var canvas = FindAnyObjectByType<Canvas>();
         if (canvas == null) return;
@@ -512,43 +634,117 @@ public class MobileHandDepthController : MonoBehaviour
             }
             else
             {
-                var newBg = new GameObject("CameraBackgroundUI", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage), typeof(AspectRatioFitter));
+                var newBg = new GameObject("CameraBackgroundUI", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
                 newBg.transform.SetParent(canvas.transform, false);
                 newBg.transform.SetAsFirstSibling();
                 cameraBackgroundUI = newBg.GetComponent<RawImage>();
             }
         }
 
-        if (cameraBackgroundUI != null && m_EditorWebCam != null)
+        if (cameraBackgroundUI != null)
         {
-            cameraBackgroundUI.texture = m_EditorWebCam;
-            cameraBackgroundUI.color = Color.white;
-            cameraBackgroundUI.gameObject.SetActive(true);
-            UpdateWebCamOrientation();
+            var fitter = cameraBackgroundUI.GetComponent<AspectRatioFitter>();
+            if (fitter != null) Destroy(fitter);
+
+            if (m_EditorWebCam != null)
+            {
+                cameraBackgroundUI.texture = m_EditorWebCam;
+                cameraBackgroundUI.color = Color.white;
+                cameraBackgroundUI.gameObject.SetActive(true);
+                UpdateWebCamOrientation();
+            }
         }
+    }
+
+    public int GetTotalVideoAngle()
+    {
+        int baseAngle = (m_EditorWebCam != null) ? m_EditorWebCam.videoRotationAngle : 0;
+#if (UNITY_ANDROID || UNITY_IOS) && !UNITY_EDITOR
+        if (m_EditorWebCam == null && Screen.height > Screen.width)
+        {
+            baseAngle = 90;
+        }
+#endif
+        return (baseAngle + cameraRotationAngle) % 360;
     }
 
     void UpdateWebCamOrientation()
     {
-        if (m_EditorWebCam == null || cameraBackgroundUI == null || m_EditorWebCam.width < 100) return;
+        if (cameraBackgroundUI == null) return;
+
+        // Ensure AspectRatioFitter is removed as it corrupts rotated RectTransforms
+        var fitter = cameraBackgroundUI.GetComponent<AspectRatioFitter>();
+        if (fitter != null) Destroy(fitter);
+
+        int texW = (m_EditorWebCam != null && m_EditorWebCam.width > 32) ? m_EditorWebCam.width : 1280;
+        int texH = (m_EditorWebCam != null && m_EditorWebCam.height > 32) ? m_EditorWebCam.height : 720;
+
+        var canvas = FindAnyObjectByType<Canvas>();
+        float screenW = Screen.width;
+        float screenH = Screen.height;
+        if (canvas != null)
+        {
+            var canvasRt = canvas.GetComponent<RectTransform>();
+            if (canvasRt != null)
+            {
+                screenW = canvasRt.rect.width;
+                screenH = canvasRt.rect.height;
+            }
+        }
+
+        int videoAngle = GetTotalVideoAngle();
+        bool isRotated90 = (videoAngle == 90 || videoAngle == 270);
+
+        // Aspect ratio of the video feed as perceived upright by the user
+        float visualAspect = isRotated90 ? ((float)texH / texW) : ((float)texW / texH);
+        float screenAspect = screenW / Mathf.Max(1f, screenH);
+
+        float visualW, visualH;
+        if (fitCameraFeed)
+        {
+            // FIT MODE: Entire camera frame is visible in upright portrait without cropping
+            if (screenAspect > visualAspect)
+            {
+                visualH = screenH;
+                visualW = screenH * visualAspect;
+            }
+            else
+            {
+                visualW = screenW;
+                visualH = screenW / visualAspect;
+            }
+        }
+        else
+        {
+            // FILL MODE: Covers 100% of the screen with zero black bars / letterboxing
+            if (screenAspect > visualAspect)
+            {
+                visualW = screenW;
+                visualH = screenW / visualAspect;
+            }
+            else
+            {
+                visualH = screenH;
+                visualW = screenH * visualAspect;
+            }
+        }
+
+        // When rotated 90 or 270 degrees, local X corresponds to screen Y and local Y to screen X
+        float localW = isRotated90 ? visualH : visualW;
+        float localH = isRotated90 ? visualW : visualH;
 
         var rect = cameraBackgroundUI.rectTransform;
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.sizeDelta = Vector2.zero;
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
         rect.anchoredPosition = Vector2.zero;
-        rect.localEulerAngles = Vector3.zero;
+        rect.sizeDelta = new Vector2(localW, localH);
+        rect.localEulerAngles = new Vector3(0, 0, -videoAngle);
 
-        var fitter = cameraBackgroundUI.GetComponent<AspectRatioFitter>();
-        if (fitter == null) fitter = cameraBackgroundUI.gameObject.AddComponent<AspectRatioFitter>();
-        fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
-
-        fitter.aspectRatio = (float)m_EditorWebCam.width / Mathf.Max(1, m_EditorWebCam.height);
-
-        // Apply mirroring and vertical flip directly via localScale
+        bool isMirrored = m_EditorWebCam != null && m_EditorWebCam.videoVerticallyMirrored;
         cameraBackgroundUI.transform.localScale = new Vector3(
             mirrorHorizontally ? -1f : 1f,
-            flipVertically ? -1f : 1f,
+            (isMirrored ^ flipVertically) ? -1f : 1f,
             1f
         );
 
@@ -586,10 +782,10 @@ public class MobileHandDepthController : MonoBehaviour
 
     Texture GetCurrentFrame()
     {
-#if UNITY_EDITOR
         if (m_EditorWebCam != null && m_EditorWebCam.isPlaying)
             return m_EditorWebCam;
-#else
+
+#if !UNITY_EDITOR
         if (arCameraManager != null && arCameraManager.TryAcquireLatestCpuImage(out XRCpuImage cpuImage))
         {
             using (cpuImage)
@@ -628,19 +824,7 @@ public class MobileHandDepthController : MonoBehaviour
 
     int GetCameraRotationAngle(Texture texture)
     {
-#if UNITY_EDITOR
-        if (m_EditorWebCam != null)
-            return m_EditorWebCam.videoRotationAngle;
-        return 0;
-#elif UNITY_ANDROID || UNITY_IOS
-        if (Screen.height > Screen.width && texture.width > texture.height)
-        {
-            return cameraRotationAngle;
-        }
-        return 0;
-#else
-        return 0;
-#endif
+        return GetTotalVideoAngle();
     }
 
     async Awaitable ProcessHandDetection(Texture texture)
@@ -717,45 +901,15 @@ public class MobileHandDepthController : MonoBehaviour
             });
         }
 
-        // Viewport scale mapping for camera background
-        float screenW = Screen.width;
-        float screenH = Screen.height;
-        float screenAspect = screenW / Mathf.Max(1f, screenH);
-
-        float camAspect;
-        if (rotAngle == 90 || rotAngle == 270)
-        {
-            camAspect = (float)texture.height / Mathf.Max(1f, texture.width);
-        }
-        else
-        {
-            camAspect = (float)texture.width / Mathf.Max(1f, texture.height);
-        }
-
-        float renderW, renderH;
-        if (screenAspect > camAspect)
-        {
-            renderW = screenW;
-            renderH = screenW / camAspect;
-        }
-        else
-        {
-            renderH = screenH;
-            renderW = screenH * camAspect;
-        }
-
         var canvas = FindAnyObjectByType<Canvas>();
-        float toCanvas = 1f;
-        if (canvas != null)
-        {
-            var canvasRt = canvas.GetComponent<RectTransform>();
-            if (canvasRt != null && screenW > 0)
-                toCanvas = canvasRt.rect.width / screenW;
-        }
+        Vector2 bgSize = (cameraBackgroundUI != null)
+            ? cameraBackgroundUI.rectTransform.sizeDelta
+            : new Vector2(texture.width, texture.height);
 
         float[] handDepths = new float[k_MaxHands];
         bool[] handDepthFound = new bool[k_MaxHands];
 
+        string topGesture = "Detecting...";
         for (int h = 0; h < handsToTrack; h++)
         {
             int detIdx = sortedDetections[h];
@@ -790,46 +944,52 @@ public class MobileHandDepthController : MonoBehaviour
 
             var keypointPositions = new Vector3[k_NumKeypoints];
             var uiPositions = new Vector2[k_NumKeypoints];
+            var raw3D = new Vector3[k_NumKeypoints];
             Vector2 palmScreenPos = Vector2.zero;
 
             for (int i = 0; i < k_NumKeypoints; i++)
             {
                 var pt = BlazeUtils.mul(M2, new float2(landmarks[3 * i], landmarks[3 * i + 1]));
+                raw3D[i] = new Vector3(landmarks[3 * i], landmarks[3 * i + 1], landmarks[3 * i + 2]);
 
-                float uRaw = (pt.x / (float)texture.width) - 0.5f;
-                float vRaw = (pt.y / (float)texture.height) - 0.5f;
+                // Normalized position in camera sensor space: [-0.5, 0.5]
+                float normX = (pt.x - 0.5f * texture.width) / (float)texture.width;
+                float normY = (pt.y - 0.5f * texture.height) / (float)texture.height;
 
-                float u, v;
-                if (rotAngle != 0)
+                // 1:1 mapping through cameraBackgroundUI transform matrix
+                // Guarantees exact lockstep alignment with camera video feed regardless of rotation/scale/mirror
+                Vector3 localPoint = new Vector3(normX * bgSize.x, normY * bgSize.y, 0f);
+
+                Vector3 worldPoint;
+                Vector2 uiPos;
+                if (cameraBackgroundUI != null)
                 {
-                    float cosT = Mathf.Cos(-theta);
-                    float sinT = Mathf.Sin(-theta);
-                    u = uRaw * cosT - vRaw * sinT;
-                    v = uRaw * sinT + vRaw * cosT;
+                    worldPoint = cameraBackgroundUI.transform.TransformPoint(localPoint);
+                    uiPos = (m_UIHandRoots[h] != null)
+                        ? (Vector2)m_UIHandRoots[h].InverseTransformPoint(worldPoint)
+                        : (canvas != null ? (Vector2)canvas.transform.InverseTransformPoint(worldPoint) : (Vector2)worldPoint);
                 }
                 else
                 {
-                    u = uRaw;
-                    v = vRaw;
+                    uiPos = new Vector2(normX * Screen.width, normY * Screen.height);
+                    worldPoint = new Vector3(uiPos.x, uiPos.y, 0f);
                 }
 
-                float uiX = (mirrorHorizontally ? -u : u) * renderW;
-                float uiY = (flipVertically ? -v : v) * renderH;
-
-                Vector2 uiPos = new Vector2(uiX * toCanvas, uiY * toCanvas);
                 uiPositions[i] = uiPos;
 
                 if (m_UIJoints[h] != null && m_UIJoints[h][i] != null)
                     m_UIJoints[h][i].anchoredPosition = uiPos;
 
-                float screenX = uiX + screenW * 0.5f;
-                float screenY = uiY + screenH * 0.5f;
+                Vector2 screenPos = RectTransformUtility.WorldToScreenPoint(
+                    (canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay) ? m_MainCamera : null,
+                    worldPoint
+                );
 
                 if (i == 0 || i == 9)
-                    palmScreenPos += new Vector2(screenX, screenY) * 0.5f;
+                    palmScreenPos += screenPos * 0.5f;
 
                 Vector3 worldPos;
-                if (depthManager != null && depthManager.TryGetWorldPositionFromDepth(new Vector2(screenX, screenY), out Vector3 arDepthPos))
+                if (depthManager != null && depthManager.TryGetWorldPositionFromDepth(screenPos, out Vector3 arDepthPos))
                 {
                     worldPos = arDepthPos;
                 }
@@ -838,8 +998,8 @@ public class MobileHandDepthController : MonoBehaviour
                     float relZ = landmarks[3 * i + 2];
                     float handDist = 0.65f - (relZ * 0.35f);
                     worldPos = m_MainCamera != null 
-                        ? m_MainCamera.ScreenToWorldPoint(new Vector3(screenX, screenY, handDist))
-                        : new Vector3(screenX / screenW, screenY / screenH, handDist);
+                        ? m_MainCamera.ScreenToWorldPoint(new Vector3(screenPos.x, screenPos.y, handDist))
+                        : new Vector3(screenPos.x / Mathf.Max(1f, Screen.width), screenPos.y / Mathf.Max(1f, Screen.height), handDist);
                 }
 
                 keypointPositions[i] = worldPos;
@@ -850,6 +1010,9 @@ public class MobileHandDepthController : MonoBehaviour
                     m_JointRenderers[h][i].SetPosition(1, worldPos + camOffset);
                 }
             }
+
+            string gesture = ClassifyGesture(raw3D);
+            if (h == 0) topGesture = gesture;
 
             // Update 3D VR Holographic Hand for slot h
             if (vrHandVisualizers != null && h < vrHandVisualizers.Length && vrHandVisualizers[h] != null && showVRHand)
@@ -881,12 +1044,46 @@ public class MobileHandDepthController : MonoBehaviour
                 }
             }
 
-            SetHandVisualActive(h, true);
-
-            if (depthManager != null)
+            // Calculate metric hand depth (meters)
+            float metricDepth = 0.5f;
+            if (depthManager != null && depthManager.TryGetDepthAtScreenPoint(palmScreenPos, out float arDepth) && arDepth > 0.05f)
             {
-                handDepthFound[h] = depthManager.TryGetDepthAtScreenPoint(palmScreenPos, out handDepths[h]);
+                metricDepth = arDepth;
+                handDepthFound[h] = true;
             }
+            else
+            {
+                // Geometric depth estimation from wrist-to-knuckle pixel span
+                float palmPixelSpan = Vector2.Distance(uiPositions[0], uiPositions[9]);
+                float refHeight = (canvas != null) ? canvas.GetComponent<RectTransform>().rect.height : Screen.height;
+                metricDepth = (refHeight * 0.17f) / Mathf.Max(15f, palmPixelSpan);
+                metricDepth = Mathf.Clamp(metricDepth, 0.20f, 2.50f);
+                handDepthFound[h] = true;
+            }
+            handDepths[h] = metricDepth;
+
+            // Depth tint on joints (closer = bright cyan/green, farther = magenta)
+            float depthFactor = Mathf.Clamp01((metricDepth - 0.25f) / 0.85f);
+            Color depthColor = Color.Lerp(new Color(0f, 1f, 0.85f, 1f), (h == 0) ? hand0Color : hand1Color, depthFactor);
+
+            for (int i = 0; i < k_NumKeypoints; i++)
+            {
+                if (m_UIJoints[h] != null && m_UIJoints[h][i] != null)
+                {
+                    var img = m_UIJoints[h][i].GetComponent<Image>();
+                    if (img != null) img.color = depthColor;
+                }
+            }
+
+            // Update Floating Depth Badge
+            if (m_UIDepthBadgeRects[h] != null && m_UIDepthBadges[h] != null)
+            {
+                m_UIDepthBadgeRects[h].anchoredPosition = uiPositions[0] + new Vector2(0f, -50f);
+                m_UIDepthBadges[h].text = $"{gesture} | {metricDepth:F2}m";
+                m_UIDepthBadgeRects[h].gameObject.SetActive(true);
+            }
+
+            SetHandVisualActive(h, true);
         }
 
         // Hide any visualizers for undetected hand slots
@@ -902,30 +1099,52 @@ public class MobileHandDepthController : MonoBehaviour
                 : $"Hand Tracking Active (1 Hand){modeHint}";
         }
 
-        UpdateDistanceUI(handDepths[0], handDepthFound[0], handDepths[1], handDepthFound[1], handsToTrack);
+        UpdateDistanceUI(handDepths[0], handDepthFound[0], handDepths[1], handDepthFound[1], handsToTrack, topGesture);
     }
 
-    void UpdateDistanceUI(float depth0, bool valid0, float depth1, bool valid1, int handsCount)
+    void UpdateDistanceUI(float depth0, bool valid0, float depth1, bool valid1, int handsCount, string gesture = "")
     {
         if (distanceText == null) return;
 
         if (handsCount == 0)
         {
-            distanceText.text = "Hand Depth: Detecting...";
+            distanceText.text = "Show your hand to track gestures";
         }
         else if (handsCount == 1)
         {
-            if (valid0 && depth0 > 0.05f)
-                distanceText.text = $"Hand Depth: {depth0:F2} m";
-            else
-                distanceText.text = "Hand Depth: Estimating...";
+            string depthStr = (valid0 && depth0 > 0.05f) ? $" ({depth0:F2} m)" : "";
+            distanceText.text = $"Gesture: {gesture}{depthStr}";
         }
         else
         {
-            string s0 = (valid0 && depth0 > 0.05f) ? $"{depth0:F2}m" : "OK";
-            string s1 = (valid1 && depth1 > 0.05f) ? $"{depth1:F2}m" : "OK";
-            distanceText.text = $"Left Hand: {s0} | Right Hand: {s1}";
+            distanceText.text = $"Both Hands: {gesture}";
         }
+    }
+
+    string ClassifyGesture(Vector3[] lm)
+    {
+        if (lm == null || lm.Length < 21) return "Unknown";
+
+        Vector3 wrist = lm[0];
+        bool indexOpen = Vector3.Distance(lm[8], wrist) > Vector3.Distance(lm[6], wrist);
+        bool middleOpen = Vector3.Distance(lm[12], wrist) > Vector3.Distance(lm[10], wrist);
+        bool ringOpen = Vector3.Distance(lm[16], wrist) > Vector3.Distance(lm[14], wrist);
+        bool pinkyOpen = Vector3.Distance(lm[20], wrist) > Vector3.Distance(lm[18], wrist);
+        bool thumbOpen = Vector3.Distance(lm[4], lm[17]) > Vector3.Distance(lm[3], lm[17]);
+
+        float pinchDist = Vector3.Distance(lm[4], lm[8]);
+        float palmScale = Vector3.Distance(lm[0], lm[9]);
+        bool isPinch = pinchDist < (palmScale * 0.35f);
+
+        if (isPinch && middleOpen && ringOpen && pinkyOpen) return "👌 Pinch / OK";
+        if (thumbOpen && indexOpen && middleOpen && ringOpen && pinkyOpen) return "🖐️ Open Palm";
+        if (!thumbOpen && !indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return "✊ Fist";
+        if (!thumbOpen && indexOpen && middleOpen && !ringOpen && !pinkyOpen) return "✌️ Peace / V";
+        if (indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return "👉 Pointing";
+        if (thumbOpen && !indexOpen && !middleOpen && !ringOpen && !pinkyOpen) return "👍 Thumbs Up";
+        if (thumbOpen && indexOpen && !middleOpen && !ringOpen && pinkyOpen) return "🤟 Rock On";
+
+        return "✋ Hand Tracking";
     }
 
     void SetStatus(string msg)
@@ -943,6 +1162,9 @@ public class MobileHandDepthController : MonoBehaviour
 
         if (m_UIHandRoots != null && h < m_UIHandRoots.Length && m_UIHandRoots[h] != null)
             m_UIHandRoots[h].gameObject.SetActive(showSkel);
+
+        if (m_UIDepthBadgeRects != null && h < m_UIDepthBadgeRects.Length && m_UIDepthBadgeRects[h] != null)
+            m_UIDepthBadgeRects[h].gameObject.SetActive(showSkel);
 
         if (m_HandVisualsRoots != null && h < m_HandVisualsRoots.Length && m_HandVisualsRoots[h] != null)
             m_HandVisualsRoots[h].SetActive(showSkel);
@@ -1052,6 +1274,37 @@ public class MobileHandDepthController : MonoBehaviour
                 brt.pivot = new Vector2(0.5f, 0f);
                 m_UIBones[h][b] = brt;
             }
+
+            // Floating Depth & Gesture Badge over Wrist
+            var badgeObj = new GameObject($"DepthBadge_{h}", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Outline));
+            badgeObj.transform.SetParent(rt, false);
+            var bRt = badgeObj.GetComponent<RectTransform>();
+            bRt.anchorMin = new Vector2(0.5f, 0.5f);
+            bRt.anchorMax = new Vector2(0.5f, 0.5f);
+            bRt.pivot = new Vector2(0.5f, 0.5f);
+            bRt.sizeDelta = new Vector2(240f, 55f);
+            m_UIDepthBadgeRects[h] = bRt;
+
+            var bImg = badgeObj.GetComponent<Image>();
+            bImg.color = new Color(0.06f, 0.08f, 0.14f, 0.90f);
+            var bOutline = badgeObj.GetComponent<Outline>();
+            bOutline.effectColor = (h == 0) ? hand0Color : hand1Color;
+            bOutline.effectDistance = new Vector2(2f, -2f);
+
+            var bTextObj = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+            bTextObj.transform.SetParent(badgeObj.transform, false);
+            var btRt = bTextObj.GetComponent<RectTransform>();
+            btRt.anchorMin = Vector2.zero;
+            btRt.anchorMax = Vector2.one;
+            btRt.sizeDelta = Vector2.zero;
+            var bText = bTextObj.GetComponent<Text>();
+            bText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
+            bText.fontSize = 20;
+            bText.fontStyle = FontStyle.Bold;
+            bText.alignment = TextAnchor.MiddleCenter;
+            bText.color = (h == 0) ? hand0Color : hand1Color;
+            m_UIDepthBadges[h] = bText;
+            badgeObj.SetActive(false);
 
             SetHandVisualActive(h, false);
         }

@@ -728,15 +728,15 @@ MonoBehaviour:
   cameraBackgroundUI: {fileID: 0}
   mirrorHorizontally: 1
   flipVertically: 0
-  cameraRotationAngle: 90
+  cameraRotationAngle: 0
   maxHands: 2
-  handScoreThreshold: 0.5
+  handScoreThreshold: 0.4
   handIouThreshold: 0.3
   vrHandVisualizer: {fileID: 0}
   vrHandVisualizerSecondary: {fileID: 0}
   vrHandVisualizers: []
   showVRHand: 1
-  showSkeleton: 0
+  showSkeleton: 1
   hand0Color: {r: 0.1, g: 0.85, b: 1, a: 0.85}
   hand1Color: {r: 0.85, g: 0.3, b: 1, a: 0.85}
   jointColor: {r: 0.2, g: 0.85, b: 1, a: 1}

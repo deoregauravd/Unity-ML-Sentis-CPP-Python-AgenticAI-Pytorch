@@ -21,7 +21,7 @@ public class CameraPermissionHelper : MonoBehaviour
 
     void Start()
     {
-        StartCoroutine(CheckAndRequestCameraPermission());
+        // Permission request is triggered on-demand via UI button
     }
 
     public IEnumerator CheckAndRequestCameraPermission()
